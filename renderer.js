@@ -276,20 +276,54 @@ const THUMBNAIL_HEIGHT = 40;
  * @returns {Promise<Blob|null>} A promise that resolves with the image blob or null if an error occurs.
  */
 async function generateExportBlob(targetWidth, targetHeight) {
-  // Ensure preview is up-to-date
-  await renderPreview();
-
   const exportCanvas = document.createElement('canvas');
   exportCanvas.width = targetWidth;
   exportCanvas.height = targetHeight;
   const exportCtx = exportCanvas.getContext('2d');
   exportCtx.clearRect(0, 0, targetWidth, targetHeight);
-  // Draw the main canvas content, scaling if necessary
-  exportCtx.drawImage(canvas, 0, 0, targetWidth, targetHeight);
+
+  // Gather all selected images' original paths in order (bottom to top)
+  const imagePathsToLoad = [];
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    if (layer.selected == null) continue;
+    const imgObj = layer.images[layer.selected];
+    if (!imgObj) continue;
+    // Use original image path, ensuring it's a file path
+    imagePathsToLoad.push(imgObj.path.startsWith('data:') ? null : `file://${imgObj.path}`);
+  }
+
+  // Load all original images
+  const loadedOriginalImages = await Promise.all(
+    imagePathsToLoad.map(src => {
+      if (!src) return Promise.resolve(null); // Skip data URIs or invalid paths for this high-res render
+      return new Promise(resolve => {
+        const img = new window.Image();
+        img.src = src;
+        img.onload = () => resolve(img);
+        img.onerror = (err) => {
+          console.error(`Error loading image for export: ${src}`, err);
+          resolve(null); // Resolve with null if an image fails to load
+        };
+      });
+    })
+  );
+
+  // Draw loaded original images in order onto the export canvas
+  loadedOriginalImages.forEach(img => {
+    if (img) {
+      exportCtx.drawImage(img, 0, 0, targetWidth, targetHeight);
+    }
+  });
 
   return new Promise((resolve) => {
     exportCanvas.toBlob((blob) => {
-      resolve(blob);
+      if (!blob) {
+        console.error('Export canvas toBlob returned null');
+        resolve(null);
+      } else {
+        resolve(blob);
+      }
     }, 'image/png');
   });
 }
