@@ -13,8 +13,9 @@ function createWindow() {
     }
   });
   win.loadFile('index.html');
-  win.webContents.openDevTools(); // Show developer tools on startup
-
+if (!app.isPackaged) {
+  win.webContents.openDevTools();
+}
   // Hide default menu and set custom menu
   const template = [
     {
