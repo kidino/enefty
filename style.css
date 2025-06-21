@@ -1,0 +1,248 @@
+body, html {
+  height: 100%;
+  margin: 0;
+  font-family: sans-serif;
+}
+#container {
+  display: flex;
+  height: 100vh;
+}
+#preview-area {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #222;
+  color: #fff;
+}
+#main-preview {
+  background: #fff;
+  border: 1px solid #888;
+  margin-bottom: 10px;
+}
+#layers-panel {
+  flex: 1;
+  background: #f4f4f4;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  min-width: 350px;
+  position: relative;
+}
+#layers-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+#layers-list {
+  flex: 1;
+  overflow-y: auto;
+  /* Add for thin vertical scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: #b0b0b0 #e0e0e0;
+  padding-right: 14px; /* Add space for the scrollbar */
+}
+
+/* For Webkit browsers (Chrome, Edge, Safari) */
+#layers-list::-webkit-scrollbar {
+  width: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  /* Move scrollbar closer to the right edge */
+  right: 4px;
+}
+#layers-list::-webkit-scrollbar-thumb {
+  background: #b0b0b0;
+  border-radius: 3px;
+}
+#layers-list::-webkit-scrollbar-thumb:hover {
+  background: #888;
+}
+.layer {
+  border: 1px solid #ccc;
+  margin-bottom: 8px;
+  padding: 6px;
+  background: #fff;
+  transition: transform 150ms cubic-bezier(.4,2,.6,1), box-shadow 0.2s;
+  position: relative;
+  z-index: 1;
+  min-height: 60px;
+}
+.layer-header {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  position: relative;
+}
+
+.layer-header > span:last-child {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.layer-header .remove-layer {
+  margin-left: 0;
+}
+.layer-drag-handle {
+  cursor: grab;
+  margin-right: 8px;
+  font-size: 18px;
+  user-select: none;
+}
+.layer-images {
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: #b0b0b0 #e0e0e0;
+}
+
+/* For Webkit browsers (Chrome, Edge, Safari) */
+.layer-images::-webkit-scrollbar {
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+}
+.layer-images::-webkit-scrollbar-thumb {
+  background: #b0b0b0;
+  border-radius: 3px;
+}
+.layer-images::-webkit-scrollbar-thumb:hover {
+  background: #888;
+}
+.layer-image-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border: 1px solid #aaa;
+  margin-right: 5px;
+  cursor: pointer;
+  background: #eee;
+}
+.layer-image-thumb.selected {
+  border: 2px solid #0078d7;
+}
+.layer-add-image {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  max-width: 40px;
+  max-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e0e0e0;
+  border: 1px dashed #aaa;
+  cursor: pointer;
+  font-size: 24px;
+  margin-right: 5px;
+  box-sizing: border-box;
+  flex: 0 0 40px;
+}
+#project-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+}
+.layer.dragging {
+  opacity: 0.5;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+.layer.drop-target {
+  box-shadow: 0 0 0 2px #0078d7 inset;
+  background: #e3f1ff;
+}
+.layer.placeholder {
+  height: 60px;
+  border: 2px dashed #0078d7;
+  margin-bottom: 8px;
+  background: #f0f8ff;
+  transition: height 0.2s;
+}
+.thumb-remove-btn {
+  position: absolute;
+  top: 0px;
+  right: 2px;
+  color: #fff;
+  background: #d32f2f;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: 0 0 2px #000;
+  user-select: none;
+  display: none;
+}
+.layer-image-thumb:hover + .thumb-remove-btn,
+.thumb-remove-btn:hover {
+  display: block;
+}
+div:hover > .thumb-remove-btn {
+  display: block;
+}
+.layer-name {
+  margin: 0 8px 0 0;
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+  display: inline-block;
+  vertical-align: middle;
+  text-align: left;
+}
+.layer-name-edit {
+  margin: 0 8px;
+  font-weight: bold;
+  font-size: 1em;
+  padding: 2px 4px;
+  border: 1px solid #aaa;
+  border-radius: 3px;
+  max-width: 120px;
+  box-sizing: border-box;
+  vertical-align: middle;
+}
+.modal {
+  position: fixed;
+  z-index: 1000;
+  left: 0; top: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-content {
+  background: #fff;
+  padding: 24px 32px;
+  border-radius: 8px;
+  min-width: 400px;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.2);
+  position: relative;
+}
+.bulk-warning {
+  font-size: 0.95em;
+}
+#bulk-modal-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+#bulk-progress-bar {
+  margin-top: 6px;
+  height: 18px;
+}
+#bulk-modal input[type="text"] {
+  margin-right: 8px;
+}

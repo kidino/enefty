@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Enefty Layer Composer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="container">
+    <div id="preview-area">
+      <canvas id="main-preview"></canvas>
+      <div style="margin-top:10px;">
+        <button id="export-png">Export PNG</button>
+        <button id="bulk-generate">Bulk Generation</button>
+      </div>
+    </div>
+    <div id="layers-panel">
+      <div id="layers-header">
+        <span>Layers</span>
+        <button id="add-layer">+</button>
+      </div>
+      <div id="layers-list"></div>
+      <div id="project-actions">
+        <button id="save-project">Save Project</button>
+        <button id="open-project">Open Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bulk Generation Modal -->
+  <div id="bulk-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h2>Bulk Generation</h2>
+      <label>
+        Destination Folder:
+        <input type="text" id="bulk-dest-folder" readonly style="width:70%;" />
+        <button id="bulk-browse">Browse...</button>
+      </label>
+      <br>
+      <label>
+        File Name Prefix:
+        <input type="text" id="bulk-prefix" style="width:40%;" value="variation" />
+      </label>
+      <div class="bulk-warning" style="color:#b00; margin:10px 0;">
+        Warning: This process will overwrite any files in the destination folder with the same names.
+      </div>
+      <div id="bulk-progress" style="display:none; margin:10px 0;">
+        Generating <span id="bulk-total"></span> images...
+        <br>
+        <progress id="bulk-progress-bar" value="0" max="0" style="width:100%;"></progress>
+        <div>
+          <span id="bulk-current-count">0</span> / <span id="bulk-total-count">0</span>
+        </div>
+      </div>
+      <div id="bulk-modal-actions">
+        <button id="bulk-generate-start">Generate</button>
+        <button id="bulk-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
