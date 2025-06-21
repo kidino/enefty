@@ -114,17 +114,46 @@ function renderLayersPanel() {
     animation: 150,
     direction: 'vertical',
     onEnd: function (evt) {
-      // Map UI order (top to bottom) to layers array (bottom to top)
-      const nodes = Array.from(list.children);
-      const newOrder = nodes.map(node => parseInt(node.getAttribute('data-idx')));
-      // Reverse to get bottom-to-top order for layers array
-      const newLayers = [];
-      for (let i = newOrder.length - 1; i >= 0; i--) {
-        newLayers.push(layers[newOrder[i]]);
+      const oldVisualIndex = evt.oldDraggableIndex;
+      const newVisualIndex = evt.newDraggableIndex;
+
+      // If the item was actually moved to a new position
+      if (oldVisualIndex !== newVisualIndex) {
+        // Convert visual indices (top-to-bottom, 0-indexed)
+        // to 'layers' array indices (bottom-to-top, 0-indexed)
+        // layers[0] is bottom-most, visual top (index 0) is layers[layers.length-1]
+        const oldArrayIndex = layers.length - 1 - oldVisualIndex;
+        const newArrayIndex = layers.length - 1 - newVisualIndex;
+
+        // Move the element in the 'layers' data array
+        const [movedLayer] = layers.splice(oldArrayIndex, 1);
+        layers.splice(newArrayIndex, 0, movedLayer);
       }
-      layers = newLayers;
-      renderLayersPanel();
-      renderPreview();
+
+      // SortableJS has already re-ordered the DOM elements visually.
+      // We have updated our `layers` data array to match this new visual order.
+      // Now, we need to update the `data-idx` attributes on the DOM elements
+      // to correctly reflect their new indices in the `layers` array.
+      // We also update default names if they are order-dependent.
+      // This avoids a full `renderLayersPanel()` which would kill the animation.
+      const listElement = evt.from; // The list element
+      const updatedNodes = Array.from(listElement.children);
+      updatedNodes.forEach((node, currentVisualIndex) => {
+        // Calculate the corresponding index in the `layers` array
+        const newArrayIndexInLayers = layers.length - 1 - currentVisualIndex;
+        node.setAttribute('data-idx', newArrayIndexInLayers);
+
+        // Update default layer name if necessary
+        // renderLayersPanel uses `layer.name || Layer ${layers.length - uiIdx}`
+        // where uiIdx is the array index. So, `layers.length - newArrayIndexInLayers` is the visual number.
+        const layerData = layers[newArrayIndexInLayers];
+        const nameSpan = node.querySelector('.layer-name');
+        if (nameSpan && layerData && !layerData.name) { // Only update if it's a default name and layerData exists
+            nameSpan.textContent = `Layer ${layers.length - newArrayIndexInLayers}`;
+        }
+      });
+
+      renderPreview(); // Update the canvas preview
     }
   });
 }
@@ -186,7 +215,7 @@ async function addImagesToLayer(layerIdx) {
   if (!filePaths.length) return;
   for (const file of filePaths) {
     const img = await loadImage(file);
-    const thumb = await createThumbnail(img, 40, 40);
+    const thumb = await createThumbnail(img, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     layers[layerIdx].images.push({
       path: file,
       name: file.split(/[\\/]/).pop(),
@@ -233,22 +262,49 @@ function removeImageFromLayer(layerIdx, imgIdx) {
   renderPreview();
 }
 
+// Default export dimensions
+const EXPORT_WIDTH = 1000;
+const EXPORT_HEIGHT = 1000;
+// Thumbnail dimensions
+const THUMBNAIL_WIDTH = 40;
+const THUMBNAIL_HEIGHT = 40;
+
+/**
+ * Generates a blob of the current canvas content at specified dimensions.
+ * @param {number} targetWidth The width of the exported image.
+ * @param {number} targetHeight The height of the exported image.
+ * @returns {Promise<Blob|null>} A promise that resolves with the image blob or null if an error occurs.
+ */
+async function generateExportBlob(targetWidth, targetHeight) {
+  // Ensure preview is up-to-date
+  await renderPreview();
+
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = targetWidth;
+  exportCanvas.height = targetHeight;
+  const exportCtx = exportCanvas.getContext('2d');
+  exportCtx.clearRect(0, 0, targetWidth, targetHeight);
+  // Draw the main canvas content, scaling if necessary
+  exportCtx.drawImage(canvas, 0, 0, targetWidth, targetHeight);
+
+  return new Promise((resolve) => {
+    exportCanvas.toBlob((blob) => {
+      resolve(blob);
+    }, 'image/png');
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('add-layer').onclick = addLayer;
   document.getElementById('export-png').onclick = async () => {
-    await renderPreview();
-    // Create a 1000x1000 canvas for export
-    const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = 1000;
-    exportCanvas.height = 1000;
-    const exportCtx = exportCanvas.getContext('2d');
-    exportCtx.clearRect(0, 0, 1000, 1000);
-    exportCtx.drawImage(canvas, 0, 0, 1000, 1000);
-    exportCanvas.toBlob(async (blob) => {
-      if (!blob) return;
+    const blob = await generateExportBlob(EXPORT_WIDTH, EXPORT_HEIGHT);
+    if (blob) {
       const arrayBuffer = await blob.arrayBuffer();
       await window.eneftyAPI.savePNG(new Uint8Array(arrayBuffer));
-    }, 'image/png');
+    } else {
+      console.error('Failed to generate blob for export.');
+      alert('Error exporting PNG. Could not generate image blob.');
+    }
   };
   document.getElementById('save-project').onclick = async () => {
     await window.eneftyAPI.saveEnefty(layers);
@@ -277,127 +333,226 @@ document.addEventListener('DOMContentLoaded', () => {
   renderPreview();
 });
 
-// Bulk Generation UI
-let bulkCancelRequested = false;
-let bulkPaused = false;
-let bulkRunning = false;
+// --- Bulk Generation ---
+const bulkGenState = {
+  running: false,
+  paused: false,
+  cancelRequested: false,
+  combos: [],
+  currentComboIndex: 0,
+  folder: '',
+  prefix: 'variation', // Default prefix
+  numDigits: 0,
+  // To correctly map combinations to layers if not all layers are used or active:
+  layersForGeneration: [],
+};
 
-function setBulkButtonState(state) {
-  const startBtn = document.getElementById('bulk-generate-start');
+// Resets the logical state of bulk generation. UI input values are preserved.
+function resetBulkGenLogicState() {
+  bulkGenState.running = false;
+  bulkGenState.paused = false;
+  bulkGenState.cancelRequested = false;
+  bulkGenState.combos = [];
+  bulkGenState.currentComboIndex = 0;
+  bulkGenState.numDigits = 0;
+  bulkGenState.layersForGeneration = [];
+  // Note: bulkGenState.folder and bulkGenState.prefix are intentionally NOT reset here
+  // to preserve user input across modal openings if desired. They are updated from UI on "Start".
+}
+
+// Updates the buttons in the bulk generation modal based on the current state.
+function updateBulkButtonUI() {
+  const startPauseResumeBtn = document.getElementById('bulk-generate-start');
   const cancelBtn = document.getElementById('bulk-cancel');
-  if (state === 'start') {
-    startBtn.textContent = 'Start';
-    startBtn.classList.remove('running', 'stop');
+
+  if (bulkGenState.running) {
+    startPauseResumeBtn.textContent = bulkGenState.paused ? 'Resume' : 'Pause';
+    startPauseResumeBtn.classList.toggle('running', !bulkGenState.paused);
+    startPauseResumeBtn.classList.remove('stop');
     cancelBtn.disabled = false;
-  } else if (state === 'stop') {
-    startBtn.textContent = 'Stop';
-    startBtn.classList.add('stop');
-    cancelBtn.disabled = true;
+  } else { // Not running (initial, completed, or cancelled)
+    startPauseResumeBtn.textContent = 'Start';
+    startPauseResumeBtn.classList.remove('running', 'stop');
+    cancelBtn.disabled = false;
   }
 }
 
 document.getElementById('bulk-generate').onclick = () => {
+  // Initialize state for modal display
+  // Preserve folder and prefix if they were already set by the user from previous run
+  bulkGenState.folder = document.getElementById('bulk-dest-folder').value || bulkGenState.folder;
+  bulkGenState.prefix = document.getElementById('bulk-prefix').value || bulkGenState.prefix || 'variation';
+
+  resetBulkGenLogicState(); // Reset core logic state variables, keeps folder/prefix in state
+
+  document.getElementById('bulk-dest-folder').value = bulkGenState.folder; // Ensure UI reflects state
+  document.getElementById('bulk-prefix').value = bulkGenState.prefix;     // Ensure UI reflects state
+
   document.getElementById('bulk-modal').style.display = 'flex';
-  document.getElementById('bulk-dest-folder').value = '';
-  document.getElementById('bulk-prefix').value = 'variation';
   document.getElementById('bulk-progress').style.display = 'none';
-  document.getElementById('bulk-modal-actions').style.display = 'flex';
-  setBulkButtonState('start');
-  bulkPaused = false;
-  bulkRunning = false;
+  document.getElementById('bulk-current-count').textContent = '0';
+  const progressBar = document.getElementById('bulk-progress-bar');
+  if (progressBar) progressBar.value = 0;
+
+  updateBulkButtonUI();
 };
 
 document.getElementById('bulk-browse').onclick = async () => {
-  const folder = await window.eneftyAPI.selectFolder();
-  if (folder) {
-    document.getElementById('bulk-dest-folder').value = folder;
+  const folderPath = await window.eneftyAPI.selectFolder();
+  if (folderPath) {
+    document.getElementById('bulk-dest-folder').value = folderPath;
+    bulkGenState.folder = folderPath; // Update state immediately
   }
 };
 
 document.getElementById('bulk-cancel').onclick = () => {
-  if (!bulkRunning) {
-    bulkCancelRequested = true;
+  bulkGenState.cancelRequested = true;
+  if (!bulkGenState.running || bulkGenState.paused) {
+    // If not running or already paused, can hide modal and reset state immediately
     document.getElementById('bulk-modal').style.display = 'none';
+    resetBulkGenLogicState(); // Full reset of logic state
+    updateBulkButtonUI();     // Update buttons to initial state ("Start")
   }
+  // If running and not paused, the loop in bulkGenerateProcess will detect cancelRequested.
+  // It will then handle hiding the modal, resetting state, and updating UI.
 };
 
 document.getElementById('bulk-generate-start').onclick = async () => {
-  const startBtn = document.getElementById('bulk-generate-start');
-  if (!bulkRunning) {
-    // Start process
-    const folder = document.getElementById('bulk-dest-folder').value;
-    const prefix = document.getElementById('bulk-prefix').value.trim() || 'variation';
-    if (!folder) {
+  // Always ensure current UI values for folder/prefix are in the state before starting/resuming.
+  bulkGenState.folder = document.getElementById('bulk-dest-folder').value;
+  bulkGenState.prefix = document.getElementById('bulk-prefix').value.trim() || 'variation';
+
+  if (bulkGenState.running) {
+    // Action is Pause or Resume
+    bulkGenState.paused = !bulkGenState.paused; // Toggle pause state
+    updateBulkButtonUI(); // Update button text to "Resume" or "Pause"
+
+    if (!bulkGenState.paused) {
+      // If resuming, continue the process.
+      // The bulkGenerateProcess function will pick up from bulkGenState.currentComboIndex.
+      bulkGenerateProcess();
+    }
+  } else {
+    // Action is Start new generation
+    if (!bulkGenState.folder) {
       alert('Please select a destination folder.');
       return;
     }
-    // Prepare all combinations
-    const indices = layers.map(layer => layer.images.map((_, i) => i));
-    if (indices.some(arr => arr.length === 0)) {
-      alert('All layers must have at least one image.');
+
+    // Use only layers that have images for generating combinations
+    bulkGenState.layersForGeneration = layers.filter(l => l.images && l.images.length > 0);
+    if (bulkGenState.layersForGeneration.length === 0) {
+      alert('No layers with images to generate from. Please add images to your layers.');
       return;
     }
-    const combos = cartesianProduct(indices);
-    const numDigits = combos.length.toString().length > 4 ? combos.length.toString().length : 5;
+
+    const indices = bulkGenState.layersForGeneration.map(layer => layer.images.map((_, i) => i));
+    bulkGenState.combos = cartesianProduct(indices);
+
+    // Check if cartesianProduct resulted in genuinely empty or trivial combinations
+    if (bulkGenState.combos.length === 0 || (bulkGenState.combos.length === 1 && bulkGenState.combos[0].length === 0) ) {
+      alert('No image combinations found. This can happen if layers are empty or no images are selected for layers that are part of the generation.');
+      resetBulkGenLogicState(); // Reset if no valid combinations
+      return;
+    }
+
+    bulkGenState.numDigits = Math.max(5, bulkGenState.combos.length.toString().length);
+    bulkGenState.currentComboIndex = 0;
+    bulkGenState.running = true;
+    bulkGenState.paused = false;
+    bulkGenState.cancelRequested = false;
+
     document.getElementById('bulk-progress').style.display = 'block';
-    document.getElementById('bulk-modal-actions').style.display = 'flex';
-    document.getElementById('bulk-total').textContent = combos.length;
-    document.getElementById('bulk-total-count').textContent = combos.length;
+    document.getElementById('bulk-total').textContent = bulkGenState.combos.length;
+    document.getElementById('bulk-total-count').textContent = bulkGenState.combos.length;
     document.getElementById('bulk-current-count').textContent = '0';
     const progressBar = document.getElementById('bulk-progress-bar');
-    if (progressBar) progressBar.max = combos.length;
+    if (progressBar) progressBar.max = bulkGenState.combos.length;
     if (progressBar) progressBar.value = 0;
-    bulkCancelRequested = false;
-    bulkPaused = false;
-    bulkRunning = true;
-    setBulkButtonState('stop');
-    // Await the process to ensure it starts
-    await bulkGenerateProcess(combos, folder, prefix, numDigits);
-  } else {
-    // Stop process
-    bulkPaused = true;
-    bulkRunning = false;
-    setBulkButtonState('start');
+
+    updateBulkButtonUI(); // Set button to "Pause"
+    bulkGenerateProcess(); // Start the generation process
   }
 };
 
-async function bulkGenerateProcess(combos, folder, prefix, numDigits) {
-  for (let i = 0; i < combos.length; i++) {
-    if (bulkCancelRequested) break;
-    if (bulkPaused) break;
-    combos[i].forEach((imgIdx, layerIdx) => {
-      layers[layerIdx].selected = imgIdx;
-    });
-    await renderPreview();
-    await new Promise(r => setTimeout(r, 10));
-    // Create a 1000x1000 canvas for export
-    const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = 1000;
-    exportCanvas.height = 1000;
-    const exportCtx = exportCanvas.getContext('2d');
-    exportCtx.clearRect(0, 0, 1000, 1000);
-    exportCtx.drawImage(canvas, 0, 0, 1000, 1000);
-    const name = `${prefix}-${String(i + 1).padStart(numDigits, '0')}.png`;
-    const buffer = await new Promise(resolve => {
-      exportCanvas.toBlob(blob => {
-        if (!blob) return resolve(null);
-        blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-      }, 'image/png');
-    });
-    if (buffer) {
-      // Save each image immediately
-      await window.eneftyAPI.bulkSavePNG(folder, [{ name, buffer }]);
-    }
-    const currentCount = document.getElementById('bulk-current-count');
-    const progressBar = document.getElementById('bulk-progress-bar');
-    if (currentCount) currentCount.textContent = i + 1;
-    if (progressBar) progressBar.value = i + 1;
+async function bulkGenerateProcess() {
+  // Ensure UI reflects correct state (e.g. "Pause" button) if process starts quickly
+  if(bulkGenState.running && !bulkGenState.paused) {
+    const startPauseResumeBtn = document.getElementById('bulk-generate-start');
+    startPauseResumeBtn.textContent = 'Pause';
+    startPauseResumeBtn.classList.add('running');
+    // Ensure 'stop' class (if it was part of old styling for pause) is removed
+    startPauseResumeBtn.classList.remove('stop');
   }
-  document.getElementById('bulk-modal').style.display = 'none';
-  bulkCancelRequested = false;
-  bulkPaused = false;
-  bulkRunning = false;
-  setBulkButtonState('start');
+
+  for (let i = bulkGenState.currentComboIndex; i < bulkGenState.combos.length; i++) {
+    if (bulkGenState.cancelRequested || bulkGenState.paused) {
+      bulkGenState.currentComboIndex = i; // Save progress
+      break;
+    }
+
+    const currentCombination = bulkGenState.combos[i];
+    currentCombination.forEach((imgIdx, layerComboIndex) => {
+      const targetLayer = bulkGenState.layersForGeneration[layerComboIndex];
+      const mainLayerIndex = layers.findIndex(l => l === targetLayer);
+      if (mainLayerIndex !== -1) {
+        layers[mainLayerIndex].selected = imgIdx;
+      } else {
+        console.warn("Could not find target layer in main layers array during bulk generation. This might indicate an issue if layers were modified during generation.");
+      }
+    });
+
+    await renderPreview();
+    // Yield to event loop for UI updates / responsiveness, e.g., progress bar.
+    // Also helps prevent the UI from freezing during intensive loop operations.
+    // Consider replacing with requestAnimationFrame or other strategies if more fine-grained control is needed.
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const blob = await generateExportBlob(EXPORT_WIDTH, EXPORT_HEIGHT);
+    const name = `${bulkGenState.prefix}-${String(i + 1).padStart(bulkGenState.numDigits, '0')}.png`;
+
+    if (blob) {
+      const buffer = await blob.arrayBuffer();
+      await window.eneftyAPI.bulkSavePNG(bulkGenState.folder, [{ name, buffer: new Uint8Array(buffer) }]);
+    } else {
+      console.warn(`Failed to generate blob for ${name}. Skipping.`);
+    }
+
+    document.getElementById('bulk-current-count').textContent = i + 1;
+    const progressBar = document.getElementById('bulk-progress-bar');
+    if (progressBar) progressBar.value = i + 1;
+
+    // If this was the last item and loop is finishing naturally
+    if (i === bulkGenState.combos.length - 1) {
+      bulkGenState.currentComboIndex = i + 1; // Mark as fully complete for alert logic
+    }
+  } // End of loop
+
+  if (bulkGenState.paused) {
+    // State is preserved. UI already updated to "Resume" by the click handler.
+  } else {
+    // Generation completed naturally or was cancelled
+    const itemsSuccessfullyProcessed = bulkGenState.currentComboIndex;
+    const totalItemsToProcess = bulkGenState.combos.length;
+    const cancelled = bulkGenState.cancelRequested;
+
+    document.getElementById('bulk-modal').style.display = 'none';
+    resetBulkGenLogicState();
+    updateBulkButtonUI();
+
+    if (cancelled) {
+         alert(`Bulk generation cancelled. ${itemsSuccessfullyProcessed} of ${totalItemsToProcess} images were processed.`);
+    } else if (itemsSuccessfullyProcessed === totalItemsToProcess && totalItemsToProcess > 0){
+         alert(`Bulk generation complete! ${itemsSuccessfullyProcessed} images generated.`);
+    } else if (totalItemsToProcess === 0) {
+        // No alert, as initial checks in 'start' button should prevent this or have already alerted.
+    } else if (itemsSuccessfullyProcessed < totalItemsToProcess && itemsSuccessfullyProcessed > 0) {
+        // This case implies the loop finished but not all items were processed,
+        // which shouldn't happen if not paused or cancelled. Could be an error state.
+        // For now, treat as completed up to itemsSuccessfullyProcessed.
+         alert(`Bulk generation finished. ${itemsSuccessfullyProcessed} of ${totalItemsToProcess} images generated.`);
+    }
+  }
 }
 
 // Helper: cartesian product for all combinations
