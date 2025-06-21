@@ -236,12 +236,17 @@ function removeImageFromLayer(layerIdx, imgIdx) {
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('add-layer').onclick = addLayer;
   document.getElementById('export-png').onclick = async () => {
-    // Ensure the preview is up to date before exporting
     await renderPreview();
-    canvas.toBlob(async (blob) => {
+    // Create a 1000x1000 canvas for export
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = 1000;
+    exportCanvas.height = 1000;
+    const exportCtx = exportCanvas.getContext('2d');
+    exportCtx.clearRect(0, 0, 1000, 1000);
+    exportCtx.drawImage(canvas, 0, 0, 1000, 1000);
+    exportCanvas.toBlob(async (blob) => {
       if (!blob) return;
       const arrayBuffer = await blob.arrayBuffer();
-      // Use Uint8Array for Electron IPC
       await window.eneftyAPI.savePNG(new Uint8Array(arrayBuffer));
     }, 'image/png');
   };
@@ -274,6 +279,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Bulk Generation UI
 let bulkCancelRequested = false;
+let bulkPaused = false;
+let bulkRunning = false;
+
+function setBulkButtonState(state) {
+  const startBtn = document.getElementById('bulk-generate-start');
+  const cancelBtn = document.getElementById('bulk-cancel');
+  if (state === 'start') {
+    startBtn.textContent = 'Start';
+    startBtn.classList.remove('running', 'stop');
+    cancelBtn.disabled = false;
+  } else if (state === 'stop') {
+    startBtn.textContent = 'Stop';
+    startBtn.classList.add('stop');
+    cancelBtn.disabled = true;
+  }
+}
 
 document.getElementById('bulk-generate').onclick = () => {
   document.getElementById('bulk-modal').style.display = 'flex';
@@ -281,6 +302,9 @@ document.getElementById('bulk-generate').onclick = () => {
   document.getElementById('bulk-prefix').value = 'variation';
   document.getElementById('bulk-progress').style.display = 'none';
   document.getElementById('bulk-modal-actions').style.display = 'flex';
+  setBulkButtonState('start');
+  bulkPaused = false;
+  bulkRunning = false;
 };
 
 document.getElementById('bulk-browse').onclick = async () => {
@@ -291,71 +315,92 @@ document.getElementById('bulk-browse').onclick = async () => {
 };
 
 document.getElementById('bulk-cancel').onclick = () => {
-  if (document.getElementById('bulk-progress').style.display === 'block') {
+  if (!bulkRunning) {
     bulkCancelRequested = true;
+    document.getElementById('bulk-modal').style.display = 'none';
   }
-  document.getElementById('bulk-modal').style.display = 'none';
 };
 
 document.getElementById('bulk-generate-start').onclick = async () => {
-  const folder = document.getElementById('bulk-dest-folder').value;
-  const prefix = document.getElementById('bulk-prefix').value.trim() || 'variation';
-  if (!folder) {
-    alert('Please select a destination folder.');
-    return;
+  const startBtn = document.getElementById('bulk-generate-start');
+  if (!bulkRunning) {
+    // Start process
+    const folder = document.getElementById('bulk-dest-folder').value;
+    const prefix = document.getElementById('bulk-prefix').value.trim() || 'variation';
+    if (!folder) {
+      alert('Please select a destination folder.');
+      return;
+    }
+    // Prepare all combinations
+    const indices = layers.map(layer => layer.images.map((_, i) => i));
+    if (indices.some(arr => arr.length === 0)) {
+      alert('All layers must have at least one image.');
+      return;
+    }
+    const combos = cartesianProduct(indices);
+    const numDigits = combos.length.toString().length > 4 ? combos.length.toString().length : 5;
+    document.getElementById('bulk-progress').style.display = 'block';
+    document.getElementById('bulk-modal-actions').style.display = 'flex';
+    document.getElementById('bulk-total').textContent = combos.length;
+    document.getElementById('bulk-total-count').textContent = combos.length;
+    document.getElementById('bulk-current-count').textContent = '0';
+    const progressBar = document.getElementById('bulk-progress-bar');
+    if (progressBar) progressBar.max = combos.length;
+    if (progressBar) progressBar.value = 0;
+    bulkCancelRequested = false;
+    bulkPaused = false;
+    bulkRunning = true;
+    setBulkButtonState('stop');
+    // Await the process to ensure it starts
+    await bulkGenerateProcess(combos, folder, prefix, numDigits);
+  } else {
+    // Stop process
+    bulkPaused = true;
+    bulkRunning = false;
+    setBulkButtonState('start');
   }
-  // Prepare all combinations
-  const indices = layers.map(layer => layer.images.map((_, i) => i));
-  if (indices.some(arr => arr.length === 0)) {
-    alert('All layers must have at least one image.');
-    return;
-  }
-  const combos = cartesianProduct(indices);
-  const numDigits = combos.length.toString().length > 4 ? combos.length.toString().length : 5;
-  document.getElementById('bulk-progress').style.display = 'block';
-  document.getElementById('bulk-modal-actions').style.display = 'none';
-  document.getElementById('bulk-total').textContent = combos.length;
-  document.getElementById('bulk-total-count').textContent = combos.length;
-  document.getElementById('bulk-current-count').textContent = '0';
-  document.getElementById('bulk-progress-bar').max = combos.length;
-  document.getElementById('bulk-progress-bar').value = 0;
-  bulkCancelRequested = false;
+};
 
-  // Generate images
-  const files = [];
+async function bulkGenerateProcess(combos, folder, prefix, numDigits) {
   for (let i = 0; i < combos.length; i++) {
     if (bulkCancelRequested) break;
+    if (bulkPaused) break;
     combos[i].forEach((imgIdx, layerIdx) => {
       layers[layerIdx].selected = imgIdx;
     });
     await renderPreview();
     await new Promise(r => setTimeout(r, 10));
+    // Create a 1000x1000 canvas for export
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = 1000;
+    exportCanvas.height = 1000;
+    const exportCtx = exportCanvas.getContext('2d');
+    exportCtx.clearRect(0, 0, 1000, 1000);
+    exportCtx.drawImage(canvas, 0, 0, 1000, 1000);
     const name = `${prefix}-${String(i + 1).padStart(numDigits, '0')}.png`;
-    const buffer = await new Promise(resolve =>
-      canvas.toBlob(blob => {
+    const buffer = await new Promise(resolve => {
+      exportCanvas.toBlob(blob => {
         if (!blob) return resolve(null);
         blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-      }, 'image/png')
-    );
+      }, 'image/png');
+    });
     if (buffer) {
-      files.push({ name, buffer });
+      // Save each image immediately
+      await window.eneftyAPI.bulkSavePNG(folder, [{ name, buffer }]);
     }
-    // Only update progress if elements exist
     const currentCount = document.getElementById('bulk-current-count');
     const progressBar = document.getElementById('bulk-progress-bar');
     if (currentCount) currentCount.textContent = i + 1;
     if (progressBar) progressBar.value = i + 1;
   }
-  if (!bulkCancelRequested && files.length) {
-    await window.eneftyAPI.bulkSavePNG(folder, files);
-  }
   document.getElementById('bulk-modal').style.display = 'none';
   bulkCancelRequested = false;
+  bulkPaused = false;
+  bulkRunning = false;
+  setBulkButtonState('start');
 }
 
-// Helper: cartesian product
+// Helper: cartesian product for all combinations
 function cartesianProduct(arr) {
-  return arr.reduce((a, b) =>
-    a.flatMap(d => b.map(e => [].concat(d, e)))
-  , [[]]);
+  return arr.reduce((a, b) => a.flatMap(d => b.map(e => [].concat(d, e))), [[]]);
 }

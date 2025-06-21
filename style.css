@@ -239,6 +239,24 @@ div:hover > .thumb-remove-btn {
   gap: 12px;
   justify-content: flex-end;
 }
+#bulk-generate-start.paused::after {
+  content: 'Pause';
+}
+#bulk-generate-start.running {
+  background: #f7c948;
+  color: #222;
+}
+#bulk-generate-start.stop {
+  background: #f7c948;
+  color: #222;
+}
+#bulk-generate-start.stop::after {
+  content: '';
+}
+#bulk-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 #bulk-progress-bar {
   margin-top: 6px;
   height: 18px;
