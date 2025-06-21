@@ -114,17 +114,46 @@ function renderLayersPanel() {
     animation: 150,
     direction: 'vertical',
     onEnd: function (evt) {
-      // Map UI order (top to bottom) to layers array (bottom to top)
-      const nodes = Array.from(list.children);
-      const newOrder = nodes.map(node => parseInt(node.getAttribute('data-idx')));
-      // Reverse to get bottom-to-top order for layers array
-      const newLayers = [];
-      for (let i = newOrder.length - 1; i >= 0; i--) {
-        newLayers.push(layers[newOrder[i]]);
+      const oldVisualIndex = evt.oldDraggableIndex;
+      const newVisualIndex = evt.newDraggableIndex;
+
+      // If the item was actually moved to a new position
+      if (oldVisualIndex !== newVisualIndex) {
+        // Convert visual indices (top-to-bottom, 0-indexed)
+        // to 'layers' array indices (bottom-to-top, 0-indexed)
+        // layers[0] is bottom-most, visual top (index 0) is layers[layers.length-1]
+        const oldArrayIndex = layers.length - 1 - oldVisualIndex;
+        const newArrayIndex = layers.length - 1 - newVisualIndex;
+
+        // Move the element in the 'layers' data array
+        const [movedLayer] = layers.splice(oldArrayIndex, 1);
+        layers.splice(newArrayIndex, 0, movedLayer);
       }
-      layers = newLayers;
-      renderLayersPanel();
-      renderPreview();
+
+      // SortableJS has already re-ordered the DOM elements visually.
+      // We have updated our `layers` data array to match this new visual order.
+      // Now, we need to update the `data-idx` attributes on the DOM elements
+      // to correctly reflect their new indices in the `layers` array.
+      // We also update default names if they are order-dependent.
+      // This avoids a full `renderLayersPanel()` which would kill the animation.
+      const listElement = evt.from; // The list element
+      const updatedNodes = Array.from(listElement.children);
+      updatedNodes.forEach((node, currentVisualIndex) => {
+        // Calculate the corresponding index in the `layers` array
+        const newArrayIndexInLayers = layers.length - 1 - currentVisualIndex;
+        node.setAttribute('data-idx', newArrayIndexInLayers);
+
+        // Update default layer name if necessary
+        // renderLayersPanel uses `layer.name || Layer ${layers.length - uiIdx}`
+        // where uiIdx is the array index. So, `layers.length - newArrayIndexInLayers` is the visual number.
+        const layerData = layers[newArrayIndexInLayers];
+        const nameSpan = node.querySelector('.layer-name');
+        if (nameSpan && layerData && !layerData.name) { // Only update if it's a default name and layerData exists
+            nameSpan.textContent = `Layer ${layers.length - newArrayIndexInLayers}`;
+        }
+      });
+
+      renderPreview(); // Update the canvas preview
     }
   });
 }
